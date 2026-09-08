@@ -1,0 +1,20 @@
+@media (max-width: 600px) {
+  .combined-panels {
+    overflow: hidden !important;
+  }
+
+  .combined-transcript-panel {
+    flex: 0 0 calc(24% - 6px) !important;
+    min-height: 0;
+  }
+
+  .combined-answer-panel {
+    flex: 0 0 calc(70% - 6px) !important;
+    min-height: 0 !important;
+  }
+
+  .combined-transcript-panel .panelContent,
+  .combined-answer-panel .panelContent {
+    min-height: 0;
+  }
+}

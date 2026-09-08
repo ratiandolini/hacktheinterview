@@ -4,6 +4,7 @@ import { useWebSocket } from "../hooks/useWebSocket.js";
 import { useAudioCapture } from "../hooks/useAudioCapture.js";
 import { applyAnswerEvent, type AnswerEntry } from "../answerLifecycle.js";
 import { isNearBottom } from "../scrollBehavior.js";
+import "./Session.css";
 
 type Phase = "setup" | "calibrating" | "ready" | "live";
 
@@ -354,9 +355,9 @@ export function Session() {
           {phase === "live" && <button onClick={stopLive} style={{ ...styles.button, background: "#dc2626" }}>Stop Live</button>}
         </div>
       )}
-      <div style={role === "combined" ? styles.combinedPanels : styles.readerPanels}>
+      <div className={role === "combined" ? "combined-panels" : undefined} style={role === "combined" ? styles.combinedPanels : styles.readerPanels}>
         {/* Transcript panel */}
-        <div style={styles.panel}>
+        <div className={role === "combined" ? "combined-transcript-panel" : undefined} style={styles.panel}>
           <h3 style={styles.panelTitle}>Transcript</h3>
           <div ref={transcriptContentRef} onScroll={updateTranscriptAutoScroll} style={styles.panelContent}>
             {transcript.map((t, i) => (
@@ -374,7 +375,7 @@ export function Session() {
         </div>
 
         {/* Answers panel */}
-        <div style={role === "combined" ? { ...styles.panel, minHeight: 240, position: "relative" } : { ...styles.panel, flex: 2, position: "relative" }}>
+        <div className={role === "combined" ? "combined-answer-panel" : undefined} style={role === "combined" ? { ...styles.panel, minHeight: 240, position: "relative" } : { ...styles.panel, flex: 2, position: "relative" }}>
           <h3 style={styles.panelTitle}>AI Answers</h3>
           <div ref={answersContentRef} onScroll={updateAnswersAutoScroll} style={styles.panelContent}>
             {answers.length === 0 && (
