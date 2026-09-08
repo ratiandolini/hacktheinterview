@@ -30,6 +30,8 @@ export function Session() {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
   const ws = useWebSocket(routeSessionId, role);
+  const connectionLabel = ws.connected ? "● Connected — Ready" : ws.connectionState === "reconnecting" ? "◌ Reconnecting..." : "◌ Starting server...";
+  const connectionColor = ws.connected ? "#4ade80" : "#fbbf24";
 
   const onAudioData = useCallback(
     (data: ArrayBuffer) => {
@@ -214,9 +216,10 @@ export function Session() {
       <div style={styles.container}>
         <div style={styles.card}>
           <div style={styles.statusBar}>
-            <span style={{ color: ws.connected ? "#4ade80" : "#f87171" }}>
-              {ws.connected ? "● Connected" : "○ Disconnected"}
+            <span style={{ color: connectionColor }}>
+              {connectionLabel}
             </span>
+            {!ws.connected && <span aria-label="Loading server" style={styles.connectionSpinner}>↻</span>}
             <span style={{ color: "#888", fontSize: 12 }}>Session: {sessionId}</span>
           </div>
 
@@ -243,7 +246,7 @@ export function Session() {
               <p style={styles.instructions}>
                 Step 1: Calibrate your voice so we can filter it out and only transcribe the interviewer.
               </p>
-              <button onClick={startCalibration} style={styles.button}>
+              <button onClick={startCalibration} disabled={!ws.connected} style={{ ...styles.button, opacity: ws.connected ? 1 : 0.55, cursor: ws.connected ? "pointer" : "wait" }}>
                 Start Voice Calibration
               </button>
             </div>
@@ -266,7 +269,7 @@ export function Session() {
               <p style={{ ...styles.instructions, color: "#4ade80" }}>
                 ✓ Voice calibrated! Ready to go live.
               </p>
-              <button onClick={goLive} style={{ ...styles.button, background: "linear-gradient(135deg, #22c55e, #16a34a)" }}>
+              <button onClick={goLive} disabled={!ws.connected} style={{ ...styles.button, background: "linear-gradient(135deg, #22c55e, #16a34a)", opacity: ws.connected ? 1 : 0.55, cursor: ws.connected ? "pointer" : "wait" }}>
                 🔴 Go Live
               </button>
             </div>
@@ -292,9 +295,10 @@ export function Session() {
   return (
     <div style={styles.readerContainer}>
       <div style={styles.statusBar}>
-        <span style={{ color: ws.connected ? "#4ade80" : "#f87171" }}>
-          {ws.connected ? "● Connected" : "○ Disconnected"}
+        <span style={{ color: connectionColor }}>
+          {connectionLabel}
         </span>
+        {!ws.connected && <span aria-label="Loading server" style={styles.connectionSpinner}>↻</span>}
         <span style={{
           color: phase === "live" ? "#f87171" : "#888",
           fontWeight: phase === "live" ? 700 : 400,
@@ -308,9 +312,9 @@ export function Session() {
       {role === "combined" && (
         <div style={styles.combinedControls}>
           {(calibrationError || ws.error) && <p role="alert" style={styles.combinedError}>{calibrationError || ws.error}</p>}
-          {phase === "setup" && <button onClick={startCalibration} style={styles.button}>Start Voice Calibration</button>}
+          {phase === "setup" && <button onClick={startCalibration} disabled={!ws.connected} style={{ ...styles.button, opacity: ws.connected ? 1 : 0.55, cursor: ws.connected ? "pointer" : "wait" }}>Start Voice Calibration</button>}
           {phase === "calibrating" && <p style={styles.combinedStatus}>Calibrating… {calibrationTimer}s</p>}
-          {phase === "ready" && <button onClick={goLive} style={{ ...styles.button, background: "linear-gradient(135deg, #22c55e, #16a34a)" }}>🔴 Go Live</button>}
+          {phase === "ready" && <button onClick={goLive} disabled={!ws.connected} style={{ ...styles.button, background: "linear-gradient(135deg, #22c55e, #16a34a)", opacity: ws.connected ? 1 : 0.55, cursor: ws.connected ? "pointer" : "wait" }}>🔴 Go Live</button>}
           {phase === "live" && <button onClick={stopLive} style={{ ...styles.button, background: "#dc2626" }}>Stop Live</button>}
         </div>
       )}
@@ -551,6 +555,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   cursor: {
     color: "#6366f1",
+    animation: "blink 1s infinite",
+  },
+  connectionSpinner: {
+    color: "#fbbf24",
     animation: "blink 1s infinite",
   },
   answerError: {
