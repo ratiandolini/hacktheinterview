@@ -1,14 +1,21 @@
 import { DeepgramClient } from "@deepgram/sdk";
 import type { Session } from "./sessions.js";
-import { broadcastToReaders } from "./sessions.js";
+import { broadcastToAll, broadcastToReaders } from "./sessions.js";
 import { generateAnswer } from "./llm.js";
 import { InterviewerUtteranceBuffer } from "./utterance.js";
+import { collectSpeakerLabels, resetSpeakerCalibration, type DiarizedWord, withoutSpeaker } from "./speakerCalibration.js";
 
 const deepgram = new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY });
 
 // Track active Deepgram connections per session
 const activeConnections = new Map<string, any>();
 const activeUtteranceBuffers = new Map<string, InterviewerUtteranceBuffer>();
+
+export function invalidateSpeakerCalibration(session: Session, reason = "Connection changed. Calibrate your voice again before going live.") {
+  const wasCalibrated = session.isCalibrated || session.isCalibrating || session.calibratedSpeakerLabel !== null;
+  resetSpeakerCalibration(session);
+  if (wasCalibrated) broadcastToAll(session, { type: "calibration_required", error: reason });
+}
 
 export async function startTranscription(session: Session) {
   if (activeConnections.has(session.id)) return activeConnections.get(session.id);
@@ -48,36 +55,58 @@ export async function startTranscription(session: Session) {
 
   connection.on("message", (data: any) => {
     if (data.type === "Results") {
-      const transcript = data.channel?.alternatives?.[0]?.transcript;
+      const alternative = data.channel?.alternatives?.[0];
+      const words = (alternative?.words || []) as DiarizedWord[];
+      const transcript = alternative?.transcript;
+      const isFinal = Boolean(data.is_final);
+
+      if (session.isCalibrating) {
+        if (isFinal) {
+          collectSpeakerLabels(session.calibrationSpeakerCounts, words);
+          console.log("[Calibration] Final diarized words collected for session " + session.id + " (labels=" + session.calibrationSpeakerCounts.size + ")");
+        }
+        return;
+      }
+
       if (!transcript || transcript.trim() === "") return;
+      if (!session.calibratedSpeakerLabel) {
+        console.warn("[Deepgram] Dropped transcript without an active speaker calibration for session " + session.id);
+        return;
+      }
 
-      const isFinal = data.is_final;
-      console.log("[Deepgram] Transcript received for session " + session.id + " (final=" + Boolean(isFinal) + ")");
+      const filteredTranscript = withoutSpeaker(words, session.calibratedSpeakerLabel);
+      if (!filteredTranscript) {
+        console.log("[Deepgram] Ignored self-speaker-only transcript for session " + session.id);
+        return;
+      }
 
-      // Calibration does not enroll a Deepgram speaker ID, so diarization labels cannot
-      // safely identify the user. Keep all transcription instead of dropping speaker 0.
-
+      console.log("[Deepgram] Transcript received for session " + session.id + " (final=" + isFinal + ")");
       if (isFinal) {
         console.log("[Live] Transcript segment buffered for session " + session.id);
-        utteranceBuffer.addFinalSegment(transcript);
+        utteranceBuffer.addFinalSegment(filteredTranscript);
       } else {
-        broadcastToReaders(session, { type: "transcript_interim", text: transcript });
+        broadcastToReaders(session, { type: "transcript_interim", text: filteredTranscript });
       }
       return;
     }
 
-    if (data.type === "UtteranceEnd") {
+    if (data.type === "UtteranceEnd" && !session.isCalibrating) {
       utteranceBuffer.completeFromUtteranceEnd();
     }
   });
-
   connection.on("error", (err: Error) => {
     console.error("[Deepgram] Connection error for session " + session.id + ": " + err.message);
-    broadcastToReaders(session, { type: "transcription_error", error: "Deepgram transcription failed. Check the server logs and try again." });
+    if (session.isCalibrating) {
+      resetSpeakerCalibration(session);
+      broadcastToAll(session, { type: "calibration_error", error: "Calibration could not use Deepgram. Please try again." });
+    } else {
+      broadcastToReaders(session, { type: "transcription_error", error: "Deepgram transcription failed. Check the server logs and try again." });
+    }
   });
 
   connection.on("close", () => {
     console.log("[Deepgram] Connection closed for session " + session.id);
+    invalidateSpeakerCalibration(session);
     activeConnections.delete(session.id);
     activeUtteranceBuffers.get(session.id)?.dispose();
     activeUtteranceBuffers.delete(session.id);
@@ -112,4 +141,5 @@ export function stopTranscription(session: Session) {
   audioFrameCounts.delete(session.id);
   activeUtteranceBuffers.get(session.id)?.dispose();
   activeUtteranceBuffers.delete(session.id);
+  invalidateSpeakerCalibration(session);
 }

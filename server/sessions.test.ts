@@ -22,7 +22,10 @@ describe("createSession", () => {
     expect(session.interviewType).toBe("Ruby");
     expect(session.customPrompt).toBe("Expert level");
     expect(session.resumeText).toBe("10 years experience");
+    expect(session.isCalibrating).toBe(false);
     expect(session.isCalibrated).toBe(false);
+    expect(session.calibratedSpeakerLabel).toBeNull();
+    expect(session.calibrationSpeakerCounts).toEqual(new Map());
     expect(session.isLive).toBe(false);
     expect(session.calibrationAudio).toBeNull();
     expect(session.transcript).toEqual([]);

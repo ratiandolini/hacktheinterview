@@ -53,8 +53,12 @@ export function Session() {
           if (msg.answers) {
             setAnswers(msg.answers.map((answer: AnswerEntry) => ({ ...answer, done: answer.done })));
           }
-          if (msg.isLive) setPhase("live");
+          if (msg.isLive && msg.isCalibrated) setPhase("live");
           else if (msg.isCalibrated) setPhase("ready");
+          else {
+            audio.stop();
+            setPhase("setup");
+          }
           break;
         case "calibration_started":
           setPhase("calibrating");
@@ -65,7 +69,13 @@ export function Session() {
           setPhase("ready");
           break;
         case "calibration_error":
+          audio.stop();
           setCalibrationError(msg.error || "Calibration could not start. Please try again.");
+          setPhase("setup");
+          break;
+        case "calibration_required":
+          audio.stop();
+          setCalibrationError(msg.error || "Calibrate your voice before going live.");
           setPhase("setup");
           break;
         case "live_started":
@@ -78,7 +88,8 @@ export function Session() {
           audio.stop();
           break;
         case "live_stopped":
-          setPhase("ready");
+          audio.stop();
+          setPhase("setup");
           break;
         case "transcript_interim":
           setInterimText(msg.text);

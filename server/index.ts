@@ -5,6 +5,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { WebSocketServer, WebSocket } from "ws";
 import { createSession, getSession, broadcastToAll } from "./sessions.js";
 import { startTranscription, sendAudio, stopTranscription } from "./deepgram.js";
+import { getDominantSpeakerLabel, resetSpeakerCalibration } from "./speakerCalibration.js";
 import { fetchLinkedInProfile } from "./linkedin.js";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
@@ -119,13 +120,40 @@ wss.on("connection", (ws: WebSocket, req) => {
         }
 
         if (msg.type === "start_calibration") {
-          session.isCalibrated = false;
-          ws.send(JSON.stringify({ type: "calibration_started" }));
+          resetSpeakerCalibration(session);
+          session.isCalibrating = true;
+          console.log("[Calibration] Starting Deepgram calibration for session " + session.id);
+          startTranscription(session).then(() => {
+            ws.send(JSON.stringify({ type: "calibration_started" }));
+          }).catch((err) => {
+            const message = err instanceof Error ? err.message : "Unknown error";
+            console.error("[Calibration] Failed to start for session " + session.id + ": " + message);
+            resetSpeakerCalibration(session);
+            broadcastToAll(session, { type: "calibration_error", error: "Calibration could not start. Please try again." });
+          });
         } else if (msg.type === "end_calibration") {
-          session.isCalibrated = true;
-          ws.send(JSON.stringify({ type: "calibration_done" }));
-          broadcastToAll(session, { type: "calibrated" });
+          setTimeout(() => {
+            if (!session.isCalibrating) return;
+            const speakerLabel = getDominantSpeakerLabel(session.calibrationSpeakerCounts);
+            if (!speakerLabel) {
+              console.warn("[Calibration] No reliable diarization speaker label for session " + session.id);
+              resetSpeakerCalibration(session);
+              broadcastToAll(session, { type: "calibration_error", error: "We could not identify your voice. Speak continuously during calibration and try again." });
+              return;
+            }
+            session.isCalibrating = false;
+            session.isCalibrated = true;
+            session.calibratedSpeakerLabel = speakerLabel;
+            session.calibrationSpeakerCounts.clear();
+            console.log("[Calibration] Speaker label calibrated for session " + session.id);
+            broadcastToAll(session, { type: "calibration_done" });
+            broadcastToAll(session, { type: "calibrated" });
+          }, 400);
         } else if (msg.type === "start_live") {
+          if (!session.isCalibrated || !session.calibratedSpeakerLabel) {
+            broadcastToAll(session, { type: "calibration_required", error: "Calibrate your voice before going live." });
+            return;
+          }
           if (session.isLive || startingLiveSessions.has(session.id)) return;
           startingLiveSessions.add(session.id);
           console.log("[Live] Starting Deepgram for session " + session.id);
@@ -148,7 +176,7 @@ wss.on("connection", (ws: WebSocket, req) => {
         }
       } else {
         // Binary audio data — forward to Deepgram
-        if (session.isLive) {
+        if (session.isLive || session.isCalibrating) {
           const audioFrameCount = (listenerAudioFrameCounts.get(session.id) || 0) + 1;
           listenerAudioFrameCounts.set(session.id, audioFrameCount);
           if (audioFrameCount === 1 || audioFrameCount % 50 === 0) {
@@ -162,6 +190,11 @@ wss.on("connection", (ws: WebSocket, req) => {
     ws.on("close", () => {
       session.listeners.delete(ws);
       listenerAudioFrameCounts.delete(session.id);
+      if (session.isLive || session.isCalibrated || session.isCalibrating) {
+        session.isLive = false;
+        stopTranscription(session);
+        broadcastToAll(session, { type: "live_stopped" });
+      }
       console.log(`[WS] ${role} audio connection disconnected from session ${sessionId}`);
     });
   }

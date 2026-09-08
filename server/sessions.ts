@@ -15,7 +15,10 @@ export interface Session {
   customPrompt: string;
   resumeText: string;
   calibrationAudio: Float32Array | null;
+  isCalibrating: boolean;
   isCalibrated: boolean;
+  calibratedSpeakerLabel: string | null;
+  calibrationSpeakerCounts: Map<string, number>;
   isLive: boolean;
   listeners: Set<WebSocket>;
   readers: Set<WebSocket>;
@@ -33,7 +36,10 @@ export function createSession(opts: { interviewType: string; customPrompt: strin
     customPrompt: opts.customPrompt,
     resumeText: opts.resumeText,
     calibrationAudio: null,
+    isCalibrating: false,
     isCalibrated: false,
+    calibratedSpeakerLabel: null,
+    calibrationSpeakerCounts: new Map(),
     isLive: false,
     listeners: new Set(),
     readers: new Set(),
