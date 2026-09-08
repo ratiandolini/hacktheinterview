@@ -84,14 +84,16 @@ const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
 
 // WebSocket server on the same HTTP server
 const wss = new WebSocketServer({ server: server as any });
+const listenerAudioFrameCounts = new Map<string, number>();
+const startingLiveSessions = new Set<string>();
 
 wss.on("connection", (ws: WebSocket, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
   const sessionId = url.searchParams.get("sessionId");
   const role = url.searchParams.get("role"); // "listener" or "reader"
 
-  if (!sessionId || !role) {
-    ws.close(4000, "Missing sessionId or role");
+  if (!sessionId || !role || !["listener", "reader", "combined"].includes(role)) {
+    ws.close(4000, "Missing or invalid sessionId/role");
     return;
   }
 
@@ -103,12 +105,18 @@ wss.on("connection", (ws: WebSocket, req) => {
 
   console.log(`[WS] ${role} connected to session ${sessionId}`);
 
-  if (role === "listener") {
+  if (role === "listener" || role === "combined") {
     session.listeners.add(ws);
 
-    ws.on("message", (data: Buffer | string) => {
-      if (typeof data === "string") {
-        const msg = JSON.parse(data);
+    ws.on("message", (data: Buffer, isBinary: boolean) => {
+      if (!isBinary) {
+        let msg: { type?: string };
+        try {
+          msg = JSON.parse(data.toString("utf8"));
+        } catch {
+          ws.send(JSON.stringify({ type: "calibration_error", error: "Invalid control message" }));
+          return;
+        }
 
         if (msg.type === "start_calibration") {
           session.isCalibrated = false;
@@ -118,11 +126,21 @@ wss.on("connection", (ws: WebSocket, req) => {
           ws.send(JSON.stringify({ type: "calibration_done" }));
           broadcastToAll(session, { type: "calibrated" });
         } else if (msg.type === "start_live") {
-          session.isLive = true;
-          startTranscription(session).catch((err) =>
-            console.error("[WS] Failed to start transcription:", err)
-          );
-          broadcastToAll(session, { type: "live_started" });
+          if (session.isLive || startingLiveSessions.has(session.id)) return;
+          startingLiveSessions.add(session.id);
+          console.log("[Live] Starting Deepgram for session " + session.id);
+          startTranscription(session).then(() => {
+            session.isLive = true;
+            console.log("[Live] Listener went live for session " + session.id);
+            broadcastToAll(session, { type: "live_started" });
+          }).catch((err) => {
+            const message = err instanceof Error ? err.message : "Unknown error";
+            console.error("[Deepgram] Failed to start transcription for session " + session.id + ": " + message);
+            session.isLive = false;
+            broadcastToAll(session, { type: "live_error", error: "Deepgram could not start. Check the server logs and try again." });
+          }).finally(() => {
+            startingLiveSessions.delete(session.id);
+          });
         } else if (msg.type === "stop_live") {
           session.isLive = false;
           stopTranscription(session);
@@ -131,16 +149,24 @@ wss.on("connection", (ws: WebSocket, req) => {
       } else {
         // Binary audio data — forward to Deepgram
         if (session.isLive) {
-          sendAudio(session, Buffer.from(data as ArrayBuffer));
+          const audioFrameCount = (listenerAudioFrameCounts.get(session.id) || 0) + 1;
+          listenerAudioFrameCounts.set(session.id, audioFrameCount);
+          if (audioFrameCount === 1 || audioFrameCount % 50 === 0) {
+            console.log("[Live] Browser audio frame " + audioFrameCount + " received for session " + session.id);
+          }
+          sendAudio(session, data);
         }
       }
     });
 
     ws.on("close", () => {
       session.listeners.delete(ws);
-      console.log(`[WS] listener disconnected from session ${sessionId}`);
+      listenerAudioFrameCounts.delete(session.id);
+      console.log(`[WS] ${role} audio connection disconnected from session ${sessionId}`);
     });
-  } else if (role === "reader") {
+  }
+
+  if (role === "reader" || role === "combined") {
     session.readers.add(ws);
 
     // Send current state
@@ -156,7 +182,7 @@ wss.on("connection", (ws: WebSocket, req) => {
 
     ws.on("close", () => {
       session.readers.delete(ws);
-      console.log(`[WS] reader disconnected from session ${sessionId}`);
+      console.log(`[WS] ${role} reader connection disconnected from session ${sessionId}`);
     });
   }
 });

@@ -13,7 +13,7 @@ vi.mock("openai", () => {
   };
 });
 
-import { buildSystemPrompt, generateAnswer } from "./llm.js";
+import { buildSystemPrompt, DEFAULT_OPENAI_MODEL, generateAnswer, MAX_COMPLETION_TOKENS } from "./llm.js";
 import type { Session } from "./sessions.js";
 
 function makeSession(overrides: Partial<Session> = {}): Session {
@@ -66,13 +66,21 @@ describe("buildSystemPrompt", () => {
     expect(prompt).not.toContain("resume/background");
   });
 
-  it("includes all core instructions", () => {
+  it("includes concise, speakable-answer constraints", () => {
     const session = makeSession();
     const prompt = buildSystemPrompt(session);
     expect(prompt).toContain("expert interview coach");
-    expect(prompt).toContain("direct and concise");
-    expect(prompt).toContain("bullet points");
-    expect(prompt).toContain("code snippets");
+    expect(prompt).toContain("natural first person");
+    expect(prompt).toContain("2 short sentences by default");
+    expect(prompt).toContain("Usually write 25–60 words");
+    expect(prompt).toContain("Do not use bullets, headings");
+    expect(prompt).toContain("Never invent personal facts");
+    expect(prompt).toContain("[Your Name]");
+  });
+
+  it("uses the low-latency default model and small output limit", () => {
+    expect(DEFAULT_OPENAI_MODEL).toBe("gpt-5.6-luna");
+    expect(MAX_COMPLETION_TOKENS).toBe(100);
   });
 });
 
@@ -85,10 +93,11 @@ describe("generateAnswer", () => {
     await generateAnswer(session, "What is Ruby?");
 
     const calls = reader.send.mock.calls.map((c: any) => JSON.parse(c[0]));
-    expect(calls[0]).toEqual({ type: "answer_start", question: "What is Ruby?" });
+    expect(calls[0]).toMatchObject({ type: "answer_start", question: "What is Ruby?" });
+    expect(calls[0].answerId).toBeTruthy();
     // Mock returns undefined stream, so it errors gracefully
     const lastCall = calls[calls.length - 1];
-    expect(lastCall.type).toBe("answer_error");
+    expect(lastCall).toMatchObject({ type: "answer_error", answerId: calls[0].answerId });
   });
 
   it("stores question in answer_start broadcast", async () => {

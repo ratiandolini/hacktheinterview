@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket.js";
 import { useAudioCapture } from "../hooks/useAudioCapture.js";
+import { applyAnswerEvent, type AnswerEntry } from "../answerLifecycle.js";
 
 type Phase = "setup" | "calibrating" | "ready" | "live";
 
@@ -10,24 +11,25 @@ interface TranscriptEntry {
   isFinal: boolean;
 }
 
-interface AnswerEntry {
-  question: string;
-  text: string;
-  done: boolean;
-}
 
 export function Session() {
-  const { sessionId } = useParams<{ sessionId: string }>();
-  const [role, setRole] = useState<"listener" | "reader" | null>(null);
+  const { sessionId, role: roleParam } = useParams<{ sessionId: string; role?: string }>();
+  const navigate = useNavigate();
+  const routeSessionId = sessionId || "";
+  const listenerPath = "/session/" + encodeURIComponent(routeSessionId) + "/listener";
+  const readerPath = "/session/" + encodeURIComponent(routeSessionId) + "/reader";
+  const combinedPath = "/session/" + encodeURIComponent(routeSessionId) + "/combined";
+  const role = roleParam === "listener" || roleParam === "reader" || roleParam === "combined" ? roleParam : null;
   const [phase, setPhase] = useState<Phase>("setup");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [interimText, setInterimText] = useState("");
   const [answers, setAnswers] = useState<AnswerEntry[]>([]);
   const [calibrationTimer, setCalibrationTimer] = useState(10);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const answersEndRef = useRef<HTMLDivElement>(null);
   const transcriptEndRef = useRef<HTMLDivElement>(null);
 
-  const ws = useWebSocket(sessionId!, role || "reader");
+  const ws = useWebSocket(routeSessionId, role);
 
   const onAudioData = useCallback(
     (data: ArrayBuffer) => {
@@ -46,6 +48,9 @@ export function Session() {
           if (msg.transcript) {
             setTranscript(msg.transcript.map((t: string) => ({ text: t, isFinal: true })));
           }
+          if (msg.answers) {
+            setAnswers(msg.answers.map((answer: AnswerEntry) => ({ ...answer, done: answer.done })));
+          }
           if (msg.isLive) setPhase("live");
           else if (msg.isCalibrated) setPhase("ready");
           break;
@@ -54,10 +59,21 @@ export function Session() {
           break;
         case "calibration_done":
         case "calibrated":
+          setCalibrationError(null);
           setPhase("ready");
+          break;
+        case "calibration_error":
+          setCalibrationError(msg.error || "Calibration could not start. Please try again.");
+          setPhase("setup");
           break;
         case "live_started":
           setPhase("live");
+          break;
+        case "live_error":
+        case "transcription_error":
+          setCalibrationError(msg.error || "Live transcription failed. Check the server logs and try again.");
+          setPhase("ready");
+          audio.stop();
           break;
         case "live_stopped":
           setPhase("ready");
@@ -70,23 +86,24 @@ export function Session() {
           setTranscript((prev) => [...prev, { text: msg.text, isFinal: true }]);
           break;
         case "answer_start":
-          setAnswers((prev) => [...prev, { question: msg.question, text: "", done: false }]);
+          if (msg.answerId && msg.question) {
+            setAnswers((prev) => applyAnswerEvent(prev, { type: "answer_start", answerId: msg.answerId, question: msg.question }));
+          }
           break;
         case "answer_chunk":
-          setAnswers((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last) last.text += msg.content;
-            return updated;
-          });
+          if (msg.answerId && msg.content) {
+            setAnswers((prev) => applyAnswerEvent(prev, { type: "answer_chunk", answerId: msg.answerId, content: msg.content }));
+          }
           break;
         case "answer_done":
-          setAnswers((prev) => {
-            const updated = [...prev];
-            const last = updated[updated.length - 1];
-            if (last) last.done = true;
-            return updated;
-          });
+          if (msg.answerId) {
+            setAnswers((prev) => applyAnswerEvent(prev, { type: "answer_done", answerId: msg.answerId }));
+          }
+          break;
+        case "answer_error":
+          if (msg.answerId) {
+            setAnswers((prev) => applyAnswerEvent(prev, { type: "answer_error", answerId: msg.answerId, error: msg.error }));
+          }
           break;
       }
     });
@@ -108,7 +125,9 @@ export function Session() {
       setCalibrationTimer((t) => {
         if (t <= 1) {
           clearInterval(interval);
-          ws.sendJSON({ type: "end_calibration" });
+          if (!ws.sendJSON({ type: "end_calibration" })) {
+            setCalibrationError("WebSocket disconnected before calibration could finish. Please try again.");
+          }
           audio.stop();
           return 0;
         }
@@ -119,13 +138,41 @@ export function Session() {
   }, [phase]);
 
   const startCalibration = async () => {
-    await audio.start();
-    ws.sendJSON({ type: "start_calibration" });
+    if (!ws.connected) {
+      setCalibrationError("WebSocket is not connected. Wait for Connected, then try again.");
+      return;
+    }
+
+    setCalibrationError(null);
+    try {
+      await audio.start();
+      if (!ws.sendJSON({ type: "start_calibration" })) {
+        audio.stop();
+        throw new Error("WebSocket disconnected before calibration could start.");
+      }
+    } catch (error) {
+      audio.stop();
+      setCalibrationError(error instanceof Error ? error.message : "Microphone access failed. Check browser permissions and try again.");
+    }
   };
 
   const goLive = async () => {
-    await audio.start();
-    ws.sendJSON({ type: "start_live" });
+    if (!ws.connected) {
+      setCalibrationError("WebSocket is not connected. Wait for Connected, then try again.");
+      return;
+    }
+
+    setCalibrationError(null);
+    try {
+      await audio.start();
+      if (!ws.sendJSON({ type: "start_live" })) {
+        audio.stop();
+        throw new Error("WebSocket disconnected before live transcription could start.");
+      }
+    } catch (error) {
+      audio.stop();
+      setCalibrationError(error instanceof Error ? error.message : "Microphone access failed. Check browser permissions and try again.");
+    }
   };
 
   const stopLive = () => {
@@ -142,12 +189,16 @@ export function Session() {
           <p style={{ color: "#888", marginBottom: 24, fontSize: 14 }}>
             Choose your role for this device
           </p>
-          <div style={{ display: "flex", gap: 12 }}>
-            <button onClick={() => setRole("listener")} style={styles.roleBtn}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <button onClick={() => navigate(combinedPath)} style={{ ...styles.roleBtn, flexBasis: "100%" }}>
+              📱 Combined (Recommended)
+              <span style={styles.roleSub}>Capture audio and read answers on this device</span>
+            </button>
+            <button onClick={() => navigate(listenerPath)} style={styles.roleBtn}>
               🎤 Listener
               <span style={styles.roleSub}>This device captures audio</span>
             </button>
-            <button onClick={() => setRole("reader")} style={styles.roleBtn}>
+            <button onClick={() => navigate(readerPath)} style={styles.roleBtn}>
               📖 Reader
               <span style={styles.roleSub}>This device shows answers</span>
             </button>
@@ -170,6 +221,22 @@ export function Session() {
           </div>
 
           <h2 style={{ ...styles.title, marginBottom: 24 }}>🎤 Listener Mode</h2>
+
+          <button
+            onClick={() => {
+              console.info("[Session] Opening Reader", { sessionId: routeSessionId, readerPath });
+              window.open(readerPath, "_blank", "noopener");
+            }}
+            style={{ ...styles.button, background: "#27272a", marginBottom: 16 }}
+          >
+            Open Reader
+          </button>
+
+          {(calibrationError || ws.error) && (
+            <p role="alert" style={{ color: "#f87171", fontSize: 14, lineHeight: 1.5, marginBottom: 16 }}>
+              {calibrationError || ws.error}
+            </p>
+          )}
 
           {phase === "setup" && (
             <div>
@@ -221,7 +288,7 @@ export function Session() {
     );
   }
 
-  // Reader view
+  // Reader and combined view
   return (
     <div style={styles.readerContainer}>
       <div style={styles.statusBar}>
@@ -238,7 +305,16 @@ export function Session() {
         <span style={{ color: "#666", fontSize: 12 }}>Session: {sessionId}</span>
       </div>
 
-      <div style={styles.readerPanels}>
+      {role === "combined" && (
+        <div style={styles.combinedControls}>
+          {(calibrationError || ws.error) && <p role="alert" style={styles.combinedError}>{calibrationError || ws.error}</p>}
+          {phase === "setup" && <button onClick={startCalibration} style={styles.button}>Start Voice Calibration</button>}
+          {phase === "calibrating" && <p style={styles.combinedStatus}>Calibrating… {calibrationTimer}s</p>}
+          {phase === "ready" && <button onClick={goLive} style={{ ...styles.button, background: "linear-gradient(135deg, #22c55e, #16a34a)" }}>🔴 Go Live</button>}
+          {phase === "live" && <button onClick={stopLive} style={{ ...styles.button, background: "#dc2626" }}>Stop Live</button>}
+        </div>
+      )}
+      <div style={role === "combined" ? styles.combinedPanels : styles.readerPanels}>
         {/* Transcript panel */}
         <div style={styles.panel}>
           <h3 style={styles.panelTitle}>Transcript</h3>
@@ -259,7 +335,7 @@ export function Session() {
         </div>
 
         {/* Answers panel */}
-        <div style={{ ...styles.panel, flex: 2 }}>
+        <div style={role === "combined" ? { ...styles.panel, minHeight: 240 } : { ...styles.panel, flex: 2 }}>
           <h3 style={styles.panelTitle}>AI Answers</h3>
           <div style={styles.panelContent}>
             {answers.length === 0 && (
@@ -268,11 +344,11 @@ export function Session() {
               </p>
             )}
             {answers.map((a, i) => (
-              <div key={i} style={styles.answerBlock}>
+              <div key={a.id || i} style={styles.answerBlock}>
                 <div style={styles.answerQuestion}>❓ {a.question}</div>
                 <div style={styles.answerText}>
                   {a.text}
-                  {!a.done && <span style={styles.cursor}>▊</span>}
+                  {a.error ? <span style={styles.answerError}>{a.error}</span> : !a.done && <span style={styles.cursor}>▊</span>}
                 </div>
               </div>
             ))}
@@ -371,12 +447,40 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column" as const,
     padding: 16,
+    boxSizing: "border-box" as const,
+    overflow: "hidden",
   },
   readerPanels: {
     flex: 1,
     display: "flex",
     gap: 16,
     overflow: "hidden",
+  },
+  combinedControls: {
+    background: "#141414",
+    border: "1px solid #2a2a2a",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+  },
+  combinedStatus: {
+    color: "#a5b4fc",
+    margin: 0,
+    textAlign: "center",
+    fontWeight: 600,
+  },
+  combinedError: {
+    color: "#f87171",
+    fontSize: 13,
+    lineHeight: 1.4,
+    margin: "0 0 10px",
+  },
+  combinedPanels: {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 12,
+    overflowY: "auto" as const,
   },
   panel: {
     flex: 1,
@@ -400,6 +504,8 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     overflowY: "auto" as const,
     padding: 16,
+    boxSizing: "border-box" as const,
+    overflow: "hidden",
   },
   transcriptLine: {
     padding: "8px 0",
@@ -426,6 +532,8 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#1a1a1a",
     borderRadius: 10,
     padding: 16,
+    boxSizing: "border-box" as const,
+    overflow: "hidden",
     border: "1px solid #2a2a2a",
   },
   answerQuestion: {
@@ -439,9 +547,14 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.7,
     color: "#e0e0e0",
     whiteSpace: "pre-wrap" as const,
+    overflowWrap: "anywhere" as const,
   },
   cursor: {
     color: "#6366f1",
     animation: "blink 1s infinite",
+  },
+  answerError: {
+    color: "#f87171",
+    fontSize: 13,
   },
 };

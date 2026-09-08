@@ -32,7 +32,7 @@ export function Home() {
 
     const res = await fetch("/api/session", { method: "POST", body: form });
     const { sessionId } = await res.json();
-    navigate(`/s/${sessionId}`);
+    navigate(`/session/${sessionId}`);
   };
 
   return (

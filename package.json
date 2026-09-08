@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev:server": "tsx watch server/index.ts",
-    "dev:client": "vite",
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "node --import tsx --watch server/index.ts",
+    "dev:client": "vite --host 0.0.0.0",
+    "dev": "concurrently --kill-others-on-fail --names server,client --prefix \"[{name}]\" \"npm run dev:server\" \"npm run dev:client\"",
+    "build": "npm run build:client",
     "build:client": "vite build",
     "start": "node --import tsx server/index.ts",
     "test": "vitest run",

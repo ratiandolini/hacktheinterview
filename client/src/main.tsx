@@ -9,6 +9,8 @@ function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/session/:sessionId" element={<Session />} />
+        <Route path="/session/:sessionId/:role" element={<Session />} />
         <Route path="/s/:sessionId" element={<Session />} />
       </Routes>
     </BrowserRouter>

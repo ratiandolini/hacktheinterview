@@ -2,9 +2,12 @@ import { useEffect, useRef, useState, useCallback } from "react";
 
 type MessageHandler = (data: any) => void;
 
-export function useWebSocket(sessionId: string, role: "listener" | "reader") {
+export type SessionRole = "listener" | "reader" | "combined";
+
+export function useWebSocket(sessionId: string | undefined, role: SessionRole | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const handlersRef = useRef<MessageHandler[]>([]);
 
   const addHandler = useCallback((handler: MessageHandler) => {
@@ -15,24 +18,34 @@ export function useWebSocket(sessionId: string, role: "listener" | "reader") {
   }, []);
 
   const send = useCallback((data: string | ArrayBuffer) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(data);
-    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return false;
+    wsRef.current.send(data);
+    return true;
   }, []);
 
   const sendJSON = useCallback((data: object) => {
-    send(JSON.stringify(data));
+    return send(JSON.stringify(data));
   }, [send]);
 
   useEffect(() => {
+    if (!sessionId || !role) {
+      setConnected(false);
+      return;
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/?sessionId=${sessionId}&role=${role}`;
+    const wsUrl = `${protocol}//${window.location.host}/ws?sessionId=${sessionId}&role=${role}`;
+    console.info("[WS] Connecting", { sessionId, role, wsUrl });
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      setConnected(true);
+      setError(null);
+    };
     ws.onclose = () => setConnected(false);
+    ws.onerror = () => setError("WebSocket connection failed. Refresh the page and try again.");
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -46,5 +59,5 @@ export function useWebSocket(sessionId: string, role: "listener" | "reader") {
     };
   }, [sessionId, role]);
 
-  return { connected, send, sendJSON, addHandler };
+  return { connected, error, send, sendJSON, addHandler };
 }

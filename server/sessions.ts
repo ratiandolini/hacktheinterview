@@ -1,6 +1,14 @@
 import { v4 as uuid } from "uuid";
 import type { WebSocket } from "ws";
 
+export interface StoredAnswer {
+  id: string;
+  question: string;
+  text: string;
+  done: boolean;
+  error?: string;
+}
+
 export interface Session {
   id: string;
   interviewType: string;
@@ -9,19 +17,15 @@ export interface Session {
   calibrationAudio: Float32Array | null;
   isCalibrated: boolean;
   isLive: boolean;
-  listeners: Set<WebSocket>; // mic-streaming clients
-  readers: Set<WebSocket>;  // display clients
+  listeners: Set<WebSocket>;
+  readers: Set<WebSocket>;
   transcript: string[];
-  answers: string[];
+  answers: StoredAnswer[];
 }
 
 const sessions = new Map<string, Session>();
 
-export function createSession(opts: {
-  interviewType: string;
-  customPrompt: string;
-  resumeText: string;
-}): Session {
+export function createSession(opts: { interviewType: string; customPrompt: string; resumeText: string }): Session {
   const id = uuid().slice(0, 8);
   const session: Session = {
     id,
@@ -53,7 +57,7 @@ export function broadcastToReaders(session: Session, data: object) {
 
 export function broadcastToAll(session: Session, data: object) {
   const msg = JSON.stringify(data);
-  for (const ws of [...session.readers, ...session.listeners]) {
+  for (const ws of new Set([...session.readers, ...session.listeners])) {
     if (ws.readyState === 1) ws.send(msg);
   }
 }

@@ -13,7 +13,7 @@ AI-powered real-time interview assistant — transcribes interviewer questions a
                                                        ↓
                                                   Deepgram (transcription)
                                                        ↓
-                                                  DeepSeek / Claude (answers)
+                                                  OpenAI (answers)
                                                        ↓
 [Desktop/Browser — READER]  ←  answers via WebSocket  ←
 ```
@@ -48,7 +48,8 @@ Then open `http://localhost:5173` in your browser.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DEEPGRAM_API_KEY` | Yes | [Deepgram](https://deepgram.com) API key (free tier: 45hrs/month) |
-| `DEEPSEEK_API_KEY` | Yes | [DeepSeek](https://platform.deepseek.com) API key |
+| `OPENAI_API_KEY` | Yes | [OpenAI](https://platform.openai.com) API key (server-side only) |
+| `OPENAI_MODEL` | No | Answer-generation model (default: `gpt-5-mini`) |
 | `PORT` | No | Server port (default: 3001) |
 
 ## Commands
@@ -71,7 +72,7 @@ npm run test:watch    # Run tests in watch mode
 | Frontend | React + Vite |
 | Backend | Node.js + Hono + WebSocket |
 | Transcription | Deepgram (Nova-2, streaming) |
-| AI Answers | DeepSeek (swappable to Claude) |
+| AI Answers | OpenAI (`gpt-5-mini` by default) |
 | Resume Parsing | pdf-parse |
 | Deployment | Docker + Fly.io |
 | Tests | Vitest + v8 coverage |
@@ -92,7 +93,7 @@ npm run test:watch    # Run tests in watch mode
 ```bash
 # Deploy to Fly.io
 fly launch
-fly secrets set DEEPGRAM_API_KEY=... DEEPSEEK_API_KEY=...
+fly secrets set DEEPGRAM_API_KEY=... OPENAI_API_KEY=...
 fly deploy
 ```
 
