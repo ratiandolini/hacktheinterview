@@ -12,9 +12,10 @@ const activeConnections = new Map<string, any>();
 const activeUtteranceBuffers = new Map<string, InterviewerUtteranceBuffer>();
 
 export function invalidateSpeakerCalibration(session: Session, reason = "Connection changed. Calibrate your voice again before going live.") {
-  const wasCalibrated = session.isCalibrated || session.isCalibrating || session.calibratedSpeakerLabel !== null;
+  const wasCalibrated = session.isCalibrated && session.calibratedSpeakerLabel !== null;
+  if (!wasCalibrated) return;
   resetSpeakerCalibration(session);
-  if (wasCalibrated) broadcastToAll(session, { type: "calibration_required", error: reason });
+  broadcastToAll(session, { type: "calibration_required", error: reason });
 }
 
 export async function startTranscription(session: Session) {
