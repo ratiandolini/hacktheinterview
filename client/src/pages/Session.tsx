@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useWebSocket } from "../hooks/useWebSocket.js";
 import { useAudioCapture } from "../hooks/useAudioCapture.js";
 import { applyAnswerEvent, type AnswerEntry } from "../answerLifecycle.js";
+import { isNearBottom } from "../scrollBehavior.js";
 
 type Phase = "setup" | "calibrating" | "ready" | "live";
 
@@ -26,8 +27,11 @@ export function Session() {
   const [answers, setAnswers] = useState<AnswerEntry[]>([]);
   const [calibrationTimer, setCalibrationTimer] = useState(10);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
-  const answersEndRef = useRef<HTMLDivElement>(null);
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const transcriptContentRef = useRef<HTMLDivElement>(null);
+  const answersContentRef = useRef<HTMLDivElement>(null);
+  const transcriptAutoScrollRef = useRef(true);
+  const answersAutoScrollRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const ws = useWebSocket(routeSessionId, role);
   const connectionLabel = ws.connected ? "● Connected — Ready" : ws.connectionState === "reconnecting" ? "◌ Reconnecting..." : "◌ Starting server...";
@@ -41,6 +45,25 @@ export function Session() {
   );
 
   const audio = useAudioCapture(onAudioData);
+  const updateTranscriptAutoScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    transcriptAutoScrollRef.current = isNearBottom(element.scrollHeight, element.scrollTop, element.clientHeight);
+  }, []);
+
+  const updateAnswersAutoScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    const nearBottom = isNearBottom(element.scrollHeight, element.scrollTop, element.clientHeight);
+    answersAutoScrollRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const element = answersContentRef.current;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    answersAutoScrollRef.current = true;
+    setShowJumpToLatest(false);
+  }, []);
 
   // Handle incoming WS messages
   useEffect(() => {
@@ -122,12 +145,14 @@ export function Session() {
     });
   }, [ws.addHandler]);
 
-  // Auto-scroll
+  // Keep following streamed content only while the user is already reading the latest text.
   useEffect(() => {
-    answersEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const element = answersContentRef.current;
+    if (element && answersAutoScrollRef.current) element.scrollTop = element.scrollHeight;
   }, [answers]);
   useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const element = transcriptContentRef.current;
+    if (element && transcriptAutoScrollRef.current) element.scrollTop = element.scrollHeight;
   }, [transcript, interimText]);
 
   // Calibration countdown
@@ -333,7 +358,7 @@ export function Session() {
         {/* Transcript panel */}
         <div style={styles.panel}>
           <h3 style={styles.panelTitle}>Transcript</h3>
-          <div style={styles.panelContent}>
+          <div ref={transcriptContentRef} onScroll={updateTranscriptAutoScroll} style={styles.panelContent}>
             {transcript.map((t, i) => (
               <div key={i} style={styles.transcriptLine}>
                 <span style={styles.transcriptBadge}>Q</span>
@@ -345,14 +370,13 @@ export function Session() {
                 {interimText}
               </div>
             )}
-            <div ref={transcriptEndRef} />
           </div>
         </div>
 
         {/* Answers panel */}
-        <div style={role === "combined" ? { ...styles.panel, minHeight: 240 } : { ...styles.panel, flex: 2 }}>
+        <div style={role === "combined" ? { ...styles.panel, minHeight: 240, position: "relative" } : { ...styles.panel, flex: 2, position: "relative" }}>
           <h3 style={styles.panelTitle}>AI Answers</h3>
-          <div style={styles.panelContent}>
+          <div ref={answersContentRef} onScroll={updateAnswersAutoScroll} style={styles.panelContent}>
             {answers.length === 0 && (
               <p style={{ color: "#555", textAlign: "center", marginTop: 40 }}>
                 Waiting for interviewer questions...
@@ -367,8 +391,8 @@ export function Session() {
                 </div>
               </div>
             ))}
-            <div ref={answersEndRef} />
           </div>
+          {showJumpToLatest && <button type="button" onClick={jumpToLatest} style={styles.jumpToLatest}>Jump to latest</button>}
         </div>
       </div>
     </div>
@@ -518,9 +542,9 @@ const styles: Record<string, React.CSSProperties> = {
   panelContent: {
     flex: 1,
     overflowY: "auto" as const,
+    overflowX: "hidden" as const,
     padding: 16,
     boxSizing: "border-box" as const,
-    overflow: "hidden",
   },
   transcriptLine: {
     padding: "8px 0",
@@ -571,6 +595,20 @@ const styles: Record<string, React.CSSProperties> = {
   connectionSpinner: {
     color: "#fbbf24",
     animation: "blink 1s infinite",
+  },
+  jumpToLatest: {
+    position: "absolute" as const,
+    right: 16,
+    bottom: 16,
+    border: "1px solid #4f46e5",
+    borderRadius: 999,
+    background: "#312e81",
+    color: "#fff",
+    padding: "7px 11px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.35)",
   },
   answerError: {
     color: "#f87171",
