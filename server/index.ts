@@ -7,9 +7,7 @@ import { createSession, getSession, broadcastToAll } from "./sessions.js";
 import { startTranscription, sendAudio, stopTranscription } from "./deepgram.js";
 import { getDominantSpeakerLabel, resetSpeakerCalibration } from "./speakerCalibration.js";
 import { fetchLinkedInProfile } from "./linkedin.js";
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+import { parseResumeText } from "./resume.js";
 
 const app = new Hono();
 
@@ -25,12 +23,7 @@ app.post("/api/session", async (c) => {
   let resumeText = "";
   if (resumeFile) {
     const buffer = Buffer.from(await resumeFile.arrayBuffer());
-    try {
-      const parsed = await (pdf as any)(buffer);
-      resumeText = parsed.text;
-    } catch (e) {
-      console.error("PDF parse error:", e);
-    }
+    resumeText = await parseResumeText(buffer);
   }
 
   // Fetch LinkedIn profile if URL provided
