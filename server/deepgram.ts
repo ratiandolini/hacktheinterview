@@ -3,6 +3,7 @@ import type { Session } from "./sessions.js";
 import { broadcastToAll, broadcastToReaders } from "./sessions.js";
 import { generateAnswer } from "./llm.js";
 import { InterviewerUtteranceBuffer } from "./utterance.js";
+import { DeepgramKeepAliveManager } from "./deepgramKeepAlive.js";
 import { collectSpeakerLabels, resetSpeakerCalibration, type DiarizedWord, withoutSpeaker } from "./speakerCalibration.js";
 
 const deepgram = new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY });
@@ -10,6 +11,9 @@ const deepgram = new DeepgramClient({ apiKey: process.env.DEEPGRAM_API_KEY });
 // Track active Deepgram connections per session
 const activeConnections = new Map<string, any>();
 const activeUtteranceBuffers = new Map<string, InterviewerUtteranceBuffer>();
+const deepgramKeepAlives = new DeepgramKeepAliveManager((sessionId) => {
+  console.log("[Deepgram] KeepAlive sent for session " + sessionId);
+});
 
 export function invalidateSpeakerCalibration(session: Session, reason = "Connection changed. Calibrate your voice again before going live.") {
   const wasCalibrated = session.isCalibrated && session.calibratedSpeakerLabel !== null;
@@ -106,6 +110,7 @@ export async function startTranscription(session: Session) {
   });
 
   connection.on("close", () => {
+    deepgramKeepAlives.stop(session.id, connection);
     console.log("[Deepgram] Connection closed for session " + session.id);
     invalidateSpeakerCalibration(session);
     activeConnections.delete(session.id);
@@ -116,6 +121,7 @@ export async function startTranscription(session: Session) {
   connection.connect();
   await connection.waitForOpen();
   activeConnections.set(session.id, connection);
+  deepgramKeepAlives.start(session.id, connection);
   console.log("[Deepgram] Ready for 16 kHz linear16 mono audio for session " + session.id);
 
   return connection;
@@ -133,9 +139,11 @@ export function sendAudio(session: Session, audioData: Buffer) {
     console.log("[Live] Received audio frame " + count + " for session " + session.id + " (" + audioData.length + " bytes)");
   }
   connection.sendMedia(audioData);
+  deepgramKeepAlives.recordAudio(session.id);
 }
 
 export function stopTranscription(session: Session) {
+  deepgramKeepAlives.stop(session.id);
   const connection = activeConnections.get(session.id);
   if (connection) connection.close();
   activeConnections.delete(session.id);
