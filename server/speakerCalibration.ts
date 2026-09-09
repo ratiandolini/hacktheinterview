@@ -5,6 +5,7 @@ export interface DiarizedWord {
 
 export const MIN_CALIBRATION_WORDS = 3;
 export const MIN_DOMINANT_SPEAKER_SHARE = 0.7;
+export const CALIBRATION_CONNECTION_GRACE_MS = 40_000;
 
 function labelFor(word: DiarizedWord): string | null {
   if (typeof word.speaker !== "string" && typeof word.speaker !== "number") return null;
@@ -45,14 +46,25 @@ export function withoutSpeaker(words: DiarizedWord[], excludedLabel: string): st
     .filter((word): word is string => Boolean(word))
     .join(" ");
 }
+export function getCalibrationReconnectGraceDelay(session: {
+  isCalibrated: boolean;
+  calibratedSpeakerLabel: string | null;
+  calibratedAt: number | null;
+}, now = Date.now()): number | null {
+  if (!session.isCalibrated || !session.calibratedSpeakerLabel || session.calibratedAt === null) return null;
+  const remaining = CALIBRATION_CONNECTION_GRACE_MS - (now - session.calibratedAt);
+  return remaining > 0 ? remaining : null;
+}
 export function resetSpeakerCalibration(session: {
   isCalibrating: boolean;
   isCalibrated: boolean;
   calibratedSpeakerLabel: string | null;
+  calibratedAt: number | null;
   calibrationSpeakerCounts: Map<string, number>;
 }): void {
   session.isCalibrating = false;
   session.isCalibrated = false;
   session.calibratedSpeakerLabel = null;
+  session.calibratedAt = null;
   session.calibrationSpeakerCounts.clear();
 }

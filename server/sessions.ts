@@ -18,6 +18,7 @@ export interface Session {
   isCalibrating: boolean;
   isCalibrated: boolean;
   calibratedSpeakerLabel: string | null;
+  calibratedAt: number | null;
   calibrationSpeakerCounts: Map<string, number>;
   isLive: boolean;
   listeners: Set<WebSocket>;
@@ -39,6 +40,7 @@ export function createSession(opts: { interviewType: string; customPrompt: strin
     isCalibrating: false,
     isCalibrated: false,
     calibratedSpeakerLabel: null,
+    calibratedAt: null,
     calibrationSpeakerCounts: new Map(),
     isLive: false,
     listeners: new Set(),

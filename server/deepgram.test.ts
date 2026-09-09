@@ -32,17 +32,18 @@ describe("speaker calibration connection lifecycle", () => {
     expect(combinedSocket.send).not.toHaveBeenCalled();
   });
 
-  it("invalidates an established calibration after the speech connection is lost", () => {
+  it("invalidates a calibrated speaker label after a genuine new speech connection replaces it, even during the grace window", () => {
     const session = createSession({ interviewType: "JS", customPrompt: "", resumeText: "" });
     const combinedSocket = makeSocket();
     session.listeners.add(combinedSocket);
     session.readers.add(combinedSocket);
     session.isCalibrated = true;
     session.calibratedSpeakerLabel = "0";
+    session.calibratedAt = Date.now();
 
     invalidateSpeakerCalibration(session);
 
-    expect(session).toMatchObject({ isCalibrating: false, isCalibrated: false, calibratedSpeakerLabel: null });
+    expect(session).toMatchObject({ isCalibrating: false, isCalibrated: false, calibratedSpeakerLabel: null, calibratedAt: null });
     expect(combinedSocket.send).toHaveBeenCalledTimes(1);
     expect(combinedSocket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"calibration_required"'));
   });

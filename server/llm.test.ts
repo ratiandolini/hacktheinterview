@@ -26,6 +26,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     isCalibrating: false,
     isCalibrated: false,
     calibratedSpeakerLabel: null,
+    calibratedAt: null,
     calibrationSpeakerCounts: new Map(),
     isLive: false,
     listeners: new Set(),

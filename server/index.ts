@@ -3,9 +3,9 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { WebSocketServer, WebSocket } from "ws";
-import { createSession, getSession, broadcastToAll } from "./sessions.js";
+import { createSession, getSession, broadcastToAll, type Session } from "./sessions.js";
 import { startTranscription, sendAudio, stopTranscription } from "./deepgram.js";
-import { getDominantSpeakerLabel, resetSpeakerCalibration } from "./speakerCalibration.js";
+import { getCalibrationReconnectGraceDelay, getDominantSpeakerLabel, resetSpeakerCalibration } from "./speakerCalibration.js";
 import { fetchLinkedInProfile } from "./linkedin.js";
 import { parseResumeText } from "./resume.js";
 
@@ -80,6 +80,33 @@ const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
 const wss = new WebSocketServer({ server: server as any });
 const listenerAudioFrameCounts = new Map<string, number>();
 const startingLiveSessions = new Set<string>();
+const listenerReconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function clearListenerReconnectTimer(sessionId: string) {
+  const timer = listenerReconnectTimers.get(sessionId);
+  if (timer) clearTimeout(timer);
+  listenerReconnectTimers.delete(sessionId);
+}
+
+function stopSessionSpeechConnection(session: Session) {
+  session.isLive = false;
+  stopTranscription(session);
+  broadcastToAll(session, { type: "live_stopped" });
+}
+
+function handleLastListenerDisconnect(session: Session) {
+  const graceDelay = getCalibrationReconnectGraceDelay(session);
+  if (graceDelay === null) {
+    stopSessionSpeechConnection(session);
+    return;
+  }
+
+  console.log("[Calibration] Retaining the calibrated Deepgram connection for " + graceDelay + "ms while the Listener reconnects for session " + session.id);
+  listenerReconnectTimers.set(session.id, setTimeout(() => {
+    listenerReconnectTimers.delete(session.id);
+    if (session.listeners.size === 0 && session.isCalibrated) stopSessionSpeechConnection(session);
+  }, graceDelay));
+}
 
 wss.on("connection", (ws: WebSocket, req) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -100,6 +127,7 @@ wss.on("connection", (ws: WebSocket, req) => {
   console.log(`[WS] ${role} connected to session ${sessionId}`);
 
   if (role === "listener" || role === "combined") {
+    clearListenerReconnectTimer(session.id);
     session.listeners.add(ws);
 
     ws.on("message", (data: Buffer, isBinary: boolean) => {
@@ -137,6 +165,7 @@ wss.on("connection", (ws: WebSocket, req) => {
             session.isCalibrating = false;
             session.isCalibrated = true;
             session.calibratedSpeakerLabel = speakerLabel;
+            session.calibratedAt = Date.now();
             session.calibrationSpeakerCounts.clear();
             console.log("[Calibration] Speaker label calibrated for session " + session.id);
             broadcastToAll(session, { type: "calibration_done" });
@@ -183,10 +212,8 @@ wss.on("connection", (ws: WebSocket, req) => {
     ws.on("close", () => {
       session.listeners.delete(ws);
       listenerAudioFrameCounts.delete(session.id);
-      if (session.isLive || session.isCalibrated || session.isCalibrating) {
-        session.isLive = false;
-        stopTranscription(session);
-        broadcastToAll(session, { type: "live_stopped" });
+      if (session.listeners.size === 0 && (session.isLive || session.isCalibrated || session.isCalibrating)) {
+        handleLastListenerDisconnect(session);
       }
       console.log(`[WS] ${role} audio connection disconnected from session ${sessionId}`);
     });
